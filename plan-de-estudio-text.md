@@ -92,17 +92,19 @@
 
 ### Clase 8:
 
-* Windows functions 3: sum, avg
-* Funciones para el manejo de datos string y date
-* Ejercicios dificultad Media - Parte 1
-* Ejercicios dificultad Media - Parte 2
-* Homework
+* Windows functions 3: sum, avg.
+* Windows functions 4: first_value, last_value.
+* Funciones para el manejo de datos tipo date.
+* Tabla calendario.
+* Ejercicios de entrevistas dificultad Media.
+* Homework.
 
 
 ### Clase 9:
 
-* Stored Procedures.
-* Merge update & Upsert.
+* Self join vs window function.
+* Nested vs correlated subqueries.
+* Funciones para el manejo de datos tipo string.
 * Ejercicio integrador
 
 
@@ -125,9 +127,9 @@
 
 ### Clase 12:
 
-* Regex.
-* Self join vs window function.
-* Nested vs correlated subqueries.
+* ETL/ELT
+* Stored Procedures.
+* Merge update & Upsert.
 * Ejercicios de entrevista dificultad alta - Parte 1
 * Ejercicios de entrevista dificultad alta - Parte 2
 * Homework.
