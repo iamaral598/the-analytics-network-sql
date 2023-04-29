@@ -1,0 +1,377 @@
+====================
+Ejercicio Integrador
+====================
+
+- Luego de un tiempo de haber respondido todas las preguntas puntuales por los gerentes, la empresa decide ampliar el contrato para 
+mejorar las bases de reporte de datos. Para esto quiere definir una serie de KPIs (Key Performance Indicator) que midan la salud de 
+la empresa en diversas areas y ademas mostrar el valor actual y la evolucion en el tiempo. 
+
+Por cada KPI listado vamos a tener que generar al menos una query (pueden ser mas de una) que nos devuelva el valor del KPI en cada 
+mes, mostrando el resultado para todos los meses disponibles.
+
+Todos los valores monetarios deben ser calculados en dolares usando el tipo de cambio promedio mensual. 
+
+El objetivo no es solo encontrar la query que responda la metrica sino entender que datos necesitamos, que es lo que significa y 
+como armar el KPI General 
+
+===============================
+- Ventas brutas, netas y margen
+===============================
+
+select 
+	extract(month from ols.fecha) as meses,
+	round(sum(ols.venta/(
+		case 
+			when moneda = 'EUR' then maf.cotizacion_usd_eur
+			when moneda = 'ARS' then maf.cotizacion_usd_peso
+			when moneda = 'URU' then maf.cotizacion_usd_uru
+			else 0
+		end)),2) as venta_bruta_usd,
+	round(sum((ols.venta-ols.impuestos+coalesce(ols.descuento,0)+coalesce(ols.creditos,0))/(
+		case 
+			when moneda = 'EUR' then maf.cotizacion_usd_eur
+			when moneda = 'ARS' then maf.cotizacion_usd_peso
+			when moneda = 'URU' then maf.cotizacion_usd_uru
+			else 0 
+		end)),2) as venta_neta_usd,
+	round(sum(((ols.venta+coalesce(ols.descuento,0)+coalesce(ols.creditos,0))/(
+		case 
+			when moneda = 'EUR' then maf.cotizacion_usd_eur
+			when moneda = 'ARS' then maf.cotizacion_usd_peso
+			when moneda = 'URU' then maf.cotizacion_usd_uru
+			else 0 
+		end))-costo.costo_promedio_usd),2) as margen_ganancia_usd
+from stg.order_line_sale as ols 
+left join stg.monthly_average_fx_rate as maf 
+ on extract(month from maf.mes) = extract(month from ols.fecha) 
+left join stg.cost as costo 
+ on costo.codigo_producto = ols.producto
+group by extract(month from ols.fecha)
+order by meses
+
+
+==================================
+- Margen por categoria de producto
+==================================
+
+select 
+	extract (month from fecha) as meses,
+	subcategoria,
+	round (sum (
+		case
+			when moneda = 'EUR' then (ols.venta - coalesce(ols.descuento,0)- coalesce(ols.impuestos,0))/maf.cotizacion_usd_eur
+			when moneda = 'ARS' then (ols.venta - coalesce(ols.descuento,0)- coalesce(ols.impuestos,0))/maf.cotizacion_usd_peso
+			when moneda = 'URU' then (ols.venta - coalesce(ols.descuento,0)- coalesce(ols.impuestos,0))/maf.cotizacion_usd_uru
+			else 0
+		end),2)  as margen_ventas_usd
+from stg.order_line_sale as ols
+left join stg.monthly_average_fx_rate as maf
+  on extract (month from ols.fecha) = extract (month from maf.mes)
+left join stg.product_master as pm
+  on ols.producto = pm.codigo_producto
+group by meses, subcategoria
+order by meses
+
+
+================================================================================== 
+- ROI por categoria de producto. ROI = Valor promedio de inventario / ventas netas
+==================================================================================
+
+with costo_inventario as (
+select
+	extract (month from i.fecha) as mes,
+	i.sku,
+	avg((inicial+final)/2 * c.costo_promedio_usd) as costo_usd
+from stg.inventory as i
+left join stg.cost as c
+  on c.codigo_producto = i.sku
+group by i.sku, extract (month from i.fecha)
+)
+
+, ventas_items as (
+select
+	producto,
+	extract (month from fecha) as mes,
+	sum(round(ols.venta/(case
+		when moneda = 'EUR' then maf.cotizacion_usd_eur
+		when moneda = 'ARS' then maf.cotizacion_usd_peso
+		when moneda = 'URU' then maf.cotizacion_usd_uru
+		else 0 end), 1)) as venta_bruta_usd
+from stg.order_line_sale as ols
+left join stg.monthly_average_fx_rate as maf
+	on extract (month from maf.mes) = extract (month from ols.fecha)
+	and extract (year from maf.mes) = extract (year from ols.fecha)
+	group by 1,2
+)
+
+select
+	pm.categoria,
+	--coalesce (i.mes, vi.mes) as mes, 
+	--coalesce (i.sku, vi.producto) as producto,
+	sum(costo_usd) as costo_usd,
+	sum(venta_bruta_usd) as venta_usd,
+	sum(coalesce (venta_bruta_usd, 0))/sum(costo_usd) as ROI
+from costo_inventario as i
+full outer join ventas_items as vi
+  on i.sku = vi.producto and vi.mes = i.mes
+left join stg.product_master as pm
+  on coalesce (i.sku, vi.producto) = pm.codigo_producto
+where coalesce (i.mes, vi.mes) = 11
+group by 1
+
+
+======================================================== 
+- AOV (Average order value), valor promedio de la orden.
+========================================================
+ 
+select 
+  ols.orden,
+  extract (month from ols.fecha) as mes,
+  round(sum((ols.venta/ols.cantidad)/(case 
+	  when ols.moneda = 'ARS' then maf.cotizacion_usd_peso 
+	  when ols.moneda = 'EUR' then maf.cotizacion_usd_eur
+	  when ols.moneda = 'URU' then maf.cotizacion_usd_uru
+  end)), 2) as AOV
+from stg.order_line_sale as ols
+left join stg.monthly_average_fx_rate as maf
+  on extract (month from maf.mes) = extract (month from ols.fecha)
+group by 1, 2
+order by 1, 2
+
+
+Contabilidad
+===================
+- Impuestos pagados
+===================
+
+select 
+  extract (month from ols.fecha) as mes,
+  round(sum(ols.impuestos/(case 
+	  when ols.moneda = 'ARS' then maf.cotizacion_usd_peso 
+	  when ols.moneda = 'EUR' then maf.cotizacion_usd_eur
+	  when ols.moneda = 'URU' then maf.cotizacion_usd_uru
+	  end)),2) as impuestos
+from stg.order_line_sale as ols
+left join stg.monthly_average_fx_rate as maf
+  on extract (month from maf.mes) = extract (month from ols.fecha)
+left join stg.cost as c
+  on ols.producto = c.codigo_producto
+group by 1
+order by 1
+
+
+============================================
+- Tasa de impuesto. Impuestos / Ventas netas
+============================================
+
+select 
+  extract (month from ols.fecha) as mes,
+  round(sum(ols.impuestos/(case 
+	  when ols.moneda = 'ARS' then maf.cotizacion_usd_peso 
+	  when ols.moneda = 'EUR' then maf.cotizacion_usd_eur
+	  when ols.moneda = 'URU' then maf.cotizacion_usd_uru
+	  end)),2) as impuestos_usd,
+  round(sum(ols.venta/(case 
+	  when ols.moneda = 'ARS' then maf.cotizacion_usd_peso 
+	  when ols.moneda = 'EUR' then maf.cotizacion_usd_eur
+	  when ols.moneda = 'URU' then maf.cotizacion_usd_uru
+	  end)) - sum(ols.impuestos/(case 
+	  when ols.moneda = 'ARS' then maf.cotizacion_usd_peso 
+	  when ols.moneda = 'EUR' then maf.cotizacion_usd_eur
+	  when ols.moneda = 'URU' then maf.cotizacion_usd_uru
+	  end)),2) as ventas_netas_usd,  
+  round (sum(ols.impuestos)/sum(ols.venta-ols.impuestos),2) as "impuestos/ventas_netas"
+from stg.order_line_sale ols
+left join stg.monthly_average_fx_rate as maf
+  on extract (month from maf.mes) = extract (month from ols.fecha)
+group by 1
+order by 1
+
+
+================================ 
+- Cantidad de creditos otorgados
+================================
+
+select
+  extract (month from fecha) as mes,
+  count (creditos) as creditos_otorgados
+from stg.order_line_sale
+group by mes
+
+
+=============================================================================================
+- Valor pagado final por order de linea. Valor pagado: Venta - descuento + impuesto - credito
+=============================================================================================
+
+select 
+  ols.orden,
+  extract (month from ols.fecha) as mes,
+  round(sum((ols.venta - coalesce(ols.descuento,0) + ols.impuestos - coalesce(ols.creditos,0))
+  /(case 
+  		when ols.moneda = 'ARS' then maf.cotizacion_usd_peso 
+  		when ols.moneda = 'EUR' then maf.cotizacion_usd_eur
+  		when ols.moneda = 'URU' then maf.cotizacion_usd_uru
+  	end)),2) as valor_pagado_usd
+from stg.order_line_sale as ols
+left join stg.monthly_average_fx_rate as maf
+  on extract (month from maf.mes) = extract (month from ols.fecha)
+group by 1,2
+order by 1,2
+
+
+Supply Chain
+=========================================
+- Costo de inventario promedio por tienda
+=========================================
+
+select 
+  i.tienda,
+  extract (month from i.fecha) as mes,
+  round(sum(((i.inicial+i.final)/2) * c.costo_promedio_usd), 2) as costo_inventario_promedio
+from stg.inventory as i
+left join stg.cost as c
+  on i.sku = c.codigo_producto
+group by 1, 2
+order by 1, 2
+
+
+=============================================================
+- Costo del stock de productos que no se vendieron por tienda
+=============================================================
+
+select 
+  i.tienda,
+  extract (month from i.fecha) as mes,
+  round(sum(i.final * c.costo_promedio_usd), 2) as costo_inventario
+from stg.inventory as i
+left join stg.cost as c
+  on i.sku = c.codigo_producto
+group by 1, 2
+order by 1, 2
+
+
+==================================
+- Cantidad y costo de devoluciones
+==================================
+
+select 
+  extract (month from rm.fecha) as mes,
+  count(rm.cantidad) as cantidad_devolucion,
+  round(sum(rm.cantidad * c.costo_promedio_usd), 2) as costo_devolucion
+from stg.return_movements as rm
+left join stg.cost as c
+  on rm.item = c.codigo_producto
+where rm.desde = 'Cliente'
+group by 1
+order by 1
+
+
+Tiendas
+==================================================================================
+- Ratio de conversion. Cantidad de ordenes generadas / Cantidad de gente que entra
+==================================================================================
+
+select 
+  ols.tienda,
+  extract (month from ols.fecha) as mes,
+  count(ols.orden) as conteo_ordenes,
+  sum(ssc.conteo) as conteo_visitas,
+  round(count(ols.orden)*100,2)/round(sum(ssc.conteo),2) as ratio_de_conversion
+from stg.order_line_sale as ols
+left join stg.super_store_count as ssc
+  on ssc.tienda = ols.tienda
+group by 1,2
+order by 1,2
+
+
+=====================================================================
+Por otro lado tambien necesitamos crear y subir a nuestra DB la tabla 
+"return_movements" para poder utilizarla en la segunda parte.
+=====================================================================
+
+create table stg.return_movements(
+	orden_venta    varchar(255),
+	envio         varchar(255),
+	item          varchar(255),
+	cantidad      int,
+	id_movimiento int,
+	desde         varchar(255),
+	hasta         varchar(255),
+	recibido_por  varchar(255),
+	fecha         date)
+
+
+## Preguntas de entrevistas
+====================================================================
+1. Como encuentro duplicados en una tabla. Dar un ejemplo mostrando 
+duplicados de la columna orden en la tabla de ventas.
+====================================================================
+select 
+  count (distinct line_key) as line_keys_unicas, 
+  count (line_key) as conteo_total
+from stg.order_line_sale
+
+==>  usando row_numbers:
+
+select
+  orden,
+  producto,
+  tienda,
+  fecha,
+  cantidad,
+  row_number() over(partition by orden, producto) as conteo
+from stg.order_line_sale
+
+
+============================
+2. Como elimino duplicados?
+============================
+
+with cte as(
+select
+  orden,
+  producto,
+  tienda,
+  fecha,
+  cantidad,
+  row_number() over(partition by orden, producto) as conteo
+from stg.order_line_sale
+)
+select *
+from cte
+where conteo = 1
+
+
+==================================================
+3. Cual es la diferencia entre UNION y UNION ALL.
+==================================================
+
+Ambas sirven para unir dos tablas, la diferencia está en que UNION no toma los registos duplicados 
+entre ambas tablas mientras UNION ALL toma todos los registros.
+
+
+=======================================================================
+4. Como encuentro registros en una tabla que no estan en otra tabla.
+    - Para probar podes crear dos tablas con una unica columna id que 
+	tengan valores: Tabla 1: 1,2,3,4 Tabla 2: 3,4,5,6
+=======================================================================
+
+create table stg.tabla1 (id int);
+insert into stg.tabla1 (id) values (1), (2), (3), (4);
+
+create table stg.tabla2 (id int);
+insert into stg.tabla2 (id) values (3), (4), (5), (6);
+
+select *
+from stg.tabla1 as t1
+left join stg.tabla2 as t2
+ on t2.id = t1.id
+where t2.id is null
+
+
+======================================================================================
+6. Cual es la diferencia entre INNER JOIN y LEFT JOIN. (podes usar la tabla anterior)
+======================================================================================
+
+LEFT JOIN toma todos los registros de la tabla de la izquierda y los que coinciden de la tabla de la derecha mientras que
+INNER JOIN solo toma los registros coinciden en las 2 tablas.
